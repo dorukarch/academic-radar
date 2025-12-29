@@ -1,7 +1,10 @@
-import os, json
+import os
+import json
 import feedparser
 import smtplib
 from email.mime.text import MIMEText
+
+from oa_detector import is_open_access
 
 STATE_FILE = "state.json"
 
@@ -25,14 +28,15 @@ def load_seen():
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             return set(json.load(f))
-    except:
+    except Exception:
         return set()
 
-def save_seen(seen):
+def save_seen(seen: set):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
+        # Son 5000 kaydı tut (dosya şişmesin)
         json.dump(list(seen)[-5000:], f)
 
-def send_email(subject, body):
+def send_email(subject: str, body: str):
     user = os.environ["SMTP_USER"]
     pwd  = os.environ["SMTP_PASS"]
     to   = os.environ["TO_EMAIL"]
@@ -48,24 +52,44 @@ def send_email(subject, body):
 
 def run():
     seen = load_seen()
-    new_items = []
+
+    normal_items = []
+    open_access_items = []
 
     for source, url in RSS_FEEDS.items():
         feed = feedparser.parse(url)
+
         for e in feed.entries[:20]:
             uid = e.get("id") or e.get("link")
-            if uid and uid not in seen:
-                title = e.get("title", "Untitled")
-                link = e.get("link", "")
-                new_items.append(f"[{source}] {title}\n{link}\n")
-                seen.add(uid)
+            if not uid or uid in seen:
+                continue
 
+            title = e.get("title", "Untitled")
+            link = e.get("link", "")
+            entry_text = f"[{source}] {title}\n{link}\n"
+
+            if is_open_access(title, link):
+                open_access_items.append(entry_text)
+            else:
+                normal_items.append(entry_text)
+
+            seen.add(uid)
+
+    # state'i bir kere kaydet
     save_seen(seen)
 
-    if new_items:
+    # Normal yayın maili
+    if normal_items:
         send_email(
-            f"Academic Radar – {len(new_items)} yeni yayın",
-            "\n".join(new_items[:50])
+            f"Academic Radar – {len(normal_items)} yeni yayın",
+            "\n".join(normal_items[:50])
+        )
+
+    # Open Access ayrı mail
+    if open_access_items:
+        send_email(
+            f"🟢 Academic Radar – OPEN ACCESS ({len(open_access_items)})",
+            "\n".join(open_access_items[:50])
         )
 
 if __name__ == "__main__":
